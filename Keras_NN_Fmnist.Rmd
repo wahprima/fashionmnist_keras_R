@@ -1,0 +1,540 @@
+---
+title: "Keras Deep Learning for Fashion Mnist"
+author: "Primaditaningtyas W"
+date: "March 25, 2019"
+output: 
+  html_document:
+    toc: true
+    toc_depth: 3
+    toc_float: 
+        collapsed: true
+    number_sections: true
+    theme: flatly
+    highlight: tango
+    css: style.css
+  pdf_document:
+    latex_engine: xelatex
+    fig_caption: yes
+editor_options: 
+  chunk_output_type: inline
+---
+
+#Setup Awal {.tabset}
+
+##R Markdown Setup
+
+```{r}
+knitr::opts_chunk$set(echo = TRUE)
+options(scipen = 1)
+rm(list = ls())
+```
+
+##Library Setup
+
+
+```{r warning=FALSE, message=FALSE}
+
+library(data.table)
+library(dplyr)
+library(keras)
+library(tidyr)
+library(ggplot2)
+
+#Untuk menjaga reproducibility model (untuk mendapatkan hasil yang sama harus dijalankan semua dari awal)
+use_session_with_seed(seed = 42)
+
+#Penggunaan environment tensorflow
+keras::use_condaenv("tensorflow")
+```
+
+
+#Pendahuluan
+
+Pada dokumentasi kali ini akan kita aplikasikan proses training neural network menggunakan library keras pada data fashion mnist. Data ini terdiri dari 10 jenis garmen yang berbeda. Tujuan dari proses training ini adalah untuk mengetahui performa neural network dalam menebak jenis-jenis garmen dari hasil training menggunakan keras.
+Akan diberikan 3 jenis model neural network :
+1. Simple Machine Learning Neural Network (Tanpa hidden layer)
+2. Deep learning menggunakan hidden layer dense
+3. Deep learning menggunakan convolutioanl neural network layer
+
+#Input 
+
+Berikut adalah proses penginputan data fashion mnist
+```{r}
+fmnist_train <- fread("data_input/train.csv")
+fmnist_test <- fread("data_input/test.csv")
+
+dim(fmnist_train)
+dim(fmnist_test)
+
+head(fmnist_train[,1])
+```
+Data fashion mnist merupakan data gambar berukuran pixel 28x28. Di atas kita dapat melihat bahwa kolom 2 sampai 784 merupakan nilai tiap pixel, sedangkan kolom satu adalah label.
+
+```{r}
+head(fmnist_train[,c(1:3,784,785)])
+range(fmnist_train[,1])
+```
+
+Label tersebut adalah nilai 0-9 dengan keterangan tiap nilai adalah :
+
+```{r}
+class_names = c('T-shirt/top',
+                'Trouser',
+                'Pullover',
+                'Dress',
+                'Coat', 
+                'Sandal',
+                'Shirt',
+                'Sneaker',
+                'Bag',
+                'Ankle boot')
+class_names
+```
+
+Sedangkan data test akan berjumlah 10000 gambar fashion yang nantinya akan kita prediksi.
+
+Lalu kita bisa melihat preview dari salah satu data tersebut dengan cara sebagai berikut :
+
+
+
+```{r}
+rotate <- function(x) t(apply(x, 2, rev))
+pict_no <- 5
+image_1 <- as.data.frame(rotate(array(as.vector(t(fmnist_train[pict_no,-1])),dim = c(28,28,1))))
+
+colnames(image_1) <- seq_len(ncol(image_1))
+image_1$y <- seq_len(nrow(image_1))
+image_1 <- gather(image_1, "x", "value", -y)
+image_1$x <- as.integer(image_1$x)
+
+ggplot(image_1, aes(x = x, y = y, fill = value)) +
+  geom_tile() +
+  scale_fill_gradient(low = "white", high = "black", na.value = NA) +
+  scale_y_reverse() +
+  theme_minimal() +
+  theme(panel.grid = element_blank())   +
+  theme(aspect.ratio = 1) +
+  xlab("") +
+  ylab("")
+
+```
+
+
+
+#PreProcess
+
+Beberapa preprocessing data yang akan kita lakukan diantaranya adalah menscale nilai dalam matrix menjadi range 0-1 dengan membagi nilai di tiap pixel dengan 255
+```{r}
+x_train <- data.matrix(fmnist_train[,-1])/255
+x_test <- data.matrix(fmnist_test[,-1])/255
+
+dim(x_train)
+dim(x_test)
+```
+```{r}
+train_labels <- array(as.vector(t(fmnist_train[,1])))
+test_labels <- array(as.vector(t(fmnist_test[,1])))
+
+class(test_labels)
+dim(test_labels)
+```
+
+Lalu kita bisa kembali tampilkan 25 data pertama pada data train dan test
+```{r}
+par(mfcol=c(5,5))
+par(mar=c(0, 0, 1.5, 0), xaxs='i', yaxs='i')
+for (i in 1:25) {
+  img <- matrix(x_train[i,], nrow=28, byrow=T)
+  img <- apply(img, 1, rev)
+  img <- apply(img, 1, rev)
+  img <- apply(img, 1, rev)
+  #img <- train_images[i, , ]
+  #img <- t(apply(img, 2, rev)) 
+  image(1:28, 1:28, img, col = gray((0:255)/255), xaxt = 'n', yaxt = 'n',
+        main = paste(class_names[train_labels[i] + 1]))
+}
+
+
+par(mfcol=c(5,5))
+par(mar=c(0, 0, 1.5, 0), xaxs='i', yaxs='i')
+for (i in 1:25) {
+  img <- matrix(x_test[i,], nrow=28, byrow=T)
+  img <- apply(img, 1, rev)
+  img <- apply(img, 1, rev)
+  img <- apply(img, 1, rev)
+  #img <- train_images[i, , ]
+  #img <- t(apply(img, 2, rev)) 
+  image(1:28, 1:28, img, col = gray((0:255)/255), xaxt = 'n', yaxt = 'n',
+        main = paste(class_names[test_labels[i] + 1]))
+}
+```
+
+Selanjutnya kita harus mengeset target label dalam bentuk one hot encoding
+
+```{r}
+y_train <- to_categorical(fmnist_train[,1])
+y_test <-  to_categorical(fmnist_test[,1])
+
+
+dim(y_train)
+dim(y_test)
+```
+
+#Pembuatan Model dan Training 
+
+Dalam perbandingan model kali ini target hanya dikhususkan pada perbedaan model berdasarkan jumlah dan jenis layernya. Untuk parameter-parameter dalam model tidak akan banyak dirubah. Model akan menggunakan loss function berupa crossentropy dikarenakan model prediksi berupa klasifikasi. Lalu optimizer juga tidak akan dirubah, pada model ini optimizer yang digunakan adalah Adam.
+
+##Model 1 Layer
+
+Penentuan Layer :
+```{r warning=FALSE}
+model_test <- keras_model_sequential()
+model_test %>% 
+  layer_dense(units = 256, activation = 'relu', input_shape = c(784)) %>% 
+  # layer_dropout(rate = 0.2) %>% 
+  # layer_dense(units = 128, activation = 'relu') %>%
+  # layer_dropout(rate = 0) %>%
+  layer_dense(units = 10, activation = 'softmax') 
+
+summary(model_test)
+```
+
+Parameter-parameter penentuan error model :
+```{r}
+model_test %>% compile(
+  loss = 'categorical_crossentropy',
+  optimizer = optimizer_adam(),
+  metrics = c('accuracy')
+)
+```
+
+
+Proses training dengan mengambil history saat training:
+```{r warning=FALSE}
+
+history <- model_test %>% fit(
+  x_train, y_train, 
+  epochs = 12, 
+  batch_size = 128,
+  validation_split = 0.2
+)
+```
+
+##Validasi Model 1 Layer
+
+
+```{r}
+scores_img_train <- model_test %>% evaluate(
+  x_train, y_train, verbose = 0
+)
+
+# Output metrics
+cat('Train loss:', scores_img_train[[1]], '\n')
+cat('Train accuracy:', scores_img_train[[2]], '\n')
+```
+
+
+```{r}
+scores_img_test <- model_test %>% evaluate(
+  x_test, y_test, verbose = 0
+)
+
+# Output metrics
+cat('Test loss:', scores_img_test[[1]], '\n')
+cat('Test accuracy:', scores_img_test[[2]], '\n')
+```
+Dari hasil di atas dapat kita lihat bahwa penmbentukan neural network tanpa hidden layer pun sudah cukup baik dalam menebak prediksi
+
+
+Berikut adalah plot proses training di tiap epoch:
+
+```{r}
+plot(1:12,history$metrics$acc,type="l",col="blue",ylim=c(0.8,1))
+lines(history$metrics$val_acc, col="green")
+legend("topright", c("train","val"), col=c("blue", "green"), lty=c(1,1))
+
+plot(1:12,history$metrics$loss,type="l",col="blue",ylim=c(0.2,0.7))
+lines(history$metrics$val_loss, col="green")
+legend("topright", c("train","val"), col=c("blue", "green"), lty=c(1,1))
+```
+
+
+Lalu kita bisa mencari prediksi hasil dari model tersebut, dibawah akan ditampilkan 25 prediksi pertama
+
+```{r}
+class_pred_img <- model_test %>% predict_classes(x_test)
+class_pred_img[1:25]
+test_labels[1:25]
+```
+
+Dan bisa ditampilkan dalam preview masing-masing gambar :
+
+```{r}
+par(mfcol=c(5,5))
+par(mar=c(0, 0, 1.5, 0), xaxs='i', yaxs='i')
+for (i in 1:25) { 
+  img <- matrix(x_test[i,], nrow=28, byrow=T)
+  img <- apply(img, 1, rev)
+  img <- apply(img, 1, rev)
+  img <- apply(img, 1, rev)
+  
+  predicted_label <- class_pred_img[i]
+  true_label <- test_labels[i]
+  if (predicted_label == true_label) {
+    color <- '#008800' 
+  } else {
+    color <- '#bb0000'
+  }
+  image(1:28, 1:28, img, col = gray((0:255)/255), xaxt = 'n', yaxt = 'n',
+        main = paste0(class_names[predicted_label + 1], " (",
+                      class_names[true_label + 1], ")"),
+        col.main = color)
+}
+```
+
+Bagian yang memiliki tulisan merah mengindikasikan ketidakcocokkan antara prediksi dan data actual.
+
+
+##Model Multiple Layer (Deep Learning)
+
+```{r warning=FALSE}
+model_test2 <- keras_model_sequential()
+model_test2 %>% 
+  layer_dense(units = 256, activation = 'relu', input_shape = c(784)) %>% 
+  layer_dropout(rate = 0.2) %>%
+  layer_dense(units = 128, activation = 'relu') %>%
+  layer_dropout(rate = 0) %>%
+  layer_dense(units = 10, activation = 'softmax') 
+
+summary(model_test2)
+```
+
+```{r}
+model_test2 %>% compile(
+  loss = 'categorical_crossentropy',
+  optimizer = optimizer_adam(),
+  metrics = c('accuracy')
+)
+```
+
+```{r warning=FALSE}
+history2 <- model_test2 %>% fit(
+  x_train, y_train, 
+  epochs = 12, 
+  batch_size = 128,
+  validation_split = 0.2
+)
+```
+
+
+##Validasi Model Multiple Layer
+
+
+```{r}
+scores_img_train2 <- model_test2 %>% evaluate(
+  x_train, y_train, verbose = 0
+)
+
+# Output metrics
+cat('Train loss:', scores_img_train2[[1]], '\n')
+cat('Train accuracy:', scores_img_train2[[2]], '\n')
+```
+
+
+```{r}
+scores_img_test2 <- model_test2 %>% evaluate(
+  x_test, y_test, verbose = 0
+)
+
+# Output metrics
+cat('Test loss:', scores_img_test2[[1]], '\n')
+cat('Test accuracy:', scores_img_test2[[2]], '\n')
+```
+Pada kasus ini penggunaan multiple layer sepertinya tidak banyak berpengaruh, bahkan akurasi pada data test pun menurun dari model sebelumnya.
+
+```{r}
+plot(1:12,history2$metrics$acc,type="l",col="blue",ylim=c(0.8,1))
+lines(history2$metrics$val_acc, col="green")
+legend("topright", c("train","val"), col=c("blue", "green"), lty=c(1,1))
+
+plot(1:12,history2$metrics$loss,type="l",col="blue",ylim=c(0.2,0.7))
+lines(history2$metrics$val_loss, col="green")
+legend("topright", c("train","val"), col=c("blue", "green"), lty=c(1,1))
+```
+
+```{r}
+class_pred_img2 <- model_test2 %>% predict_classes(x_test)
+class_pred_img2[1:25]
+test_labels[1:25]
+```
+
+
+
+```{r}
+par(mfcol=c(5,5))
+par(mar=c(0, 0, 1.5, 0), xaxs='i', yaxs='i')
+for (i in 1:25) { 
+  img <- matrix(x_test[i,], nrow=28, byrow=T)
+  img <- apply(img, 1, rev)
+  img <- apply(img, 1, rev)
+  img <- apply(img, 1, rev)
+  
+  predicted_label <- class_pred_img2[i]
+  true_label <- test_labels[i]
+  if (predicted_label == true_label) {
+    color <- '#008800' 
+  } else {
+    color <- '#bb0000'
+  }
+  image(1:28, 1:28, img, col = gray((0:255)/255), xaxt = 'n', yaxt = 'n',
+        main = paste0(class_names[predicted_label + 1], " (",
+                      class_names[true_label + 1], ")"),
+        col.main = color)
+}
+```
+Terlihat semakin memburuknya prediksi data test dari gambar di atas. Banyak tebakan yang berwarna merah menandakan model melakukan kesalahan prediksi. Dalam kasus ini 25 data test pertama sudah memiliki salah prediksi sebanyak 5.
+
+##Model Convolutional Neural Networks
+
+Untuk membuat convolutional neural network, layer input yang masuk harus berbentuk matriks persegi, oleh karena itu ada beberapa tambahan preprocess data input. Setelah preprocess data tersebut ditampilkan untuk memastikan data tidak teracak.
+```{r}
+
+x_traincnn <- array_reshape(x_train, c(nrow(x_train), 28, 28, 1))
+x_testcnn <- array_reshape(x_test, c(nrow(x_test), 28, 28, 1))
+
+for (i in 1:nrow(x_traincnn)) {
+  x_traincnn[i,,,] <- rotate(x_traincnn[i,,,])
+}
+
+for (i in 1:nrow(x_testcnn)) {
+  x_testcnn[i,,,] <- rotate(x_testcnn[i,,,])
+}
+
+dim(x_traincnn)
+dim(x_testcnn)
+
+image(x_traincnn[1,,,])
+image(x_testcnn[1,,,])
+
+
+```
+
+
+```{r warning=FALSE}
+model_test3 <- keras_model_sequential() %>%
+  layer_conv_2d(filters = 32, kernel_size = c(3,3), activation = 'relu',
+                input_shape = c(28,28,1)) %>% 
+  layer_conv_2d(filters = 64, kernel_size = c(3,3), activation = 'relu') %>% 
+  layer_max_pooling_2d(pool_size = c(2, 2)) %>% 
+  layer_dropout(rate = 0.25) %>% 
+  layer_flatten() %>% 
+  layer_dense(units = 128, activation = 'relu') %>% 
+  layer_dropout(rate = 0.5) %>% 
+  layer_dense(units = 10, activation = 'softmax')
+  
+  summary(model_test3)
+```
+
+```{r}
+model_test3 %>% compile(
+  loss = 'categorical_crossentropy',
+  optimizer = optimizer_adam(),
+  metrics = c('accuracy')
+)
+```
+
+```{r warning=FALSE, eval=FALSE}
+#Model tidak akan di run pada saat knit
+history3 <- model_test3 %>% fit(
+  x_traincnn, y_train, 
+  epochs = 12, 
+  batch_size = 128,
+  validation_split = 0.2
+)
+```
+
+```{r eval=FALSE}
+#Melakukan save model dan history training karena proses training yg cukup memakan waktu
+save_model_hdf5(model_test3, "data_input/cnn_fmnist_lbb.h5")
+saveRDS(history3,"data_input/cnn_history.rds")
+```
+
+```{r}
+#Loading model dan history cnn
+model_test3l <- load_model_hdf5("data_input/cnn_fmnist_lbb.h5")
+history3l <- readRDS("data_input/cnn_history.rds")
+```
+
+
+##Validasi Model Convolutional Neural Network
+
+
+```{r}
+scores_img_train3 <- model_test3l %>% evaluate(
+  x_traincnn, y_train, verbose = 0
+)
+
+# Output metrics
+cat('Train loss:', scores_img_train3[[1]], '\n')
+cat('Train accuracy:', scores_img_train3[[2]], '\n')
+```
+
+
+```{r}
+scores_img_test3 <- model_test3l %>% evaluate(
+  x_testcnn, y_test, verbose = 0
+)
+
+# Output metrics
+cat('Test loss:', scores_img_test3[[1]], '\n')
+cat('Test accuracy:', scores_img_test3[[2]], '\n')
+```
+
+
+```{r}
+plot(1:12,history3l$metrics$acc,type="l",col="blue",ylim=c(0.8,1))
+lines(history3l$metrics$val_acc, col="green")
+legend("topright", c("train","val"), col=c("blue", "green"), lty=c(1,1))
+
+plot(1:12,history3l$metrics$loss,type="l",col="blue",ylim=c(0.2,0.7))
+lines(history3l$metrics$val_loss, col="green")
+legend("topright", c("train","val"), col=c("blue", "green"), lty=c(1,1))
+```
+
+
+```{r}
+class_pred_img3 <- model_test3l %>% predict_classes(x_testcnn)
+class_pred_img3[1:25]
+test_labels[1:25]
+```
+
+
+```{r}
+par(mfcol=c(5,5))
+par(mar=c(0, 0, 1.5, 0), xaxs='i', yaxs='i')
+for (i in 1:25) { 
+  img <- matrix(x_test[i,], nrow=28, byrow=T)
+  img <- apply(img, 1, rev)
+  img <- apply(img, 1, rev)
+  img <- apply(img, 1, rev)
+  
+  predicted_label <- class_pred_img3[i]
+  true_label <- test_labels[i]
+  if (predicted_label == true_label) {
+    color <- '#008800' 
+  } else {
+    color <- '#bb0000'
+  }
+  image(1:28, 1:28, img, col = gray((0:255)/255), xaxt = 'n', yaxt = 'n',
+        main = paste0(class_names[predicted_label + 1], " (",
+                      class_names[true_label + 1], ")"),
+        col.main = color)
+}
+```
+Terlihat perubahan nilai akurasi baik itu dalam data training ataupun test naik sebesar 0.94 dan 0.92. Plot prediksi data test di atas juga membuktikan perubahan yang terjadi. Kesalahan tebakan terbukti lebih sedikit, hanya 2 kesalahan pada 25 data test pertama
+
+#Kesimpulan
+
+1. Semakin banyak hidden layer belum tentu berpengaruh pada peningkatan performa model
+2. Penggunaan layer yang tepat dapat meningkatkan performa model (dalam kasus ini convolutional layer)
+3. Pembuatan frame neural network sebaiknya dimulai dari model yang paling sederhana dulu, selain proses training yang cepat, kita bisa menentukan kemana arah tuning berikutnya dari performa model sederhana di awal.
